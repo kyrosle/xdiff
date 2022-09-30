@@ -1,11 +1,12 @@
 use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{anyhow, Error, Result};
 use reqwest::{
     header::{self, HeaderMap, HeaderName, HeaderValue},
-    Client, Response,
+    Client, Method, Response, Url,
 };
 use serde_json::json;
+use std::fmt::Write;
 
 use crate::{ExtraArgs, RequestProfile, ResponseProfile};
 
@@ -13,6 +14,21 @@ use crate::{ExtraArgs, RequestProfile, ResponseProfile};
 pub struct ResponseExt(Response);
 
 impl RequestProfile {
+    pub fn new(
+        method: Method,
+        url: Url,
+        params: Option<serde_json::Value>,
+        headers: HeaderMap,
+        body: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            method,
+            url,
+            params,
+            headers,
+            body,
+        }
+    }
     pub async fn send(&self, args: &ExtraArgs) -> Result<ResponseExt> {
         // let req = Client::new().request(self.method.clone(), self.url.clone());
         let (headers, query, body) = self.generate(args)?;
@@ -66,50 +82,98 @@ impl RequestProfile {
             _ => Err(anyhow::anyhow!("unsupported content-type")),
         }
     }
+    pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(params) = self.params.as_ref() {
+            if !params.is_object() {
+                return Err(anyhow!(
+                    "Params must be a object but got:\n{}",
+                    serde_yaml::to_string(&params)?
+                ));
+            }
+        }
+        if let Some(body) = self.body.as_ref() {
+            if !body.is_object() {
+                return Err(anyhow!(
+                    "Body must be a object but got:\n{}",
+                    serde_yaml::to_string(&body)?
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for RequestProfile {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
+        let mut url = Url::parse(s)?;
+        let qs = url.query_pairs();
+        let mut params = json!({});
+        for (k, v) in qs {
+            params[&*k] = v.parse()?;
+        }
+        url.set_query(None);
+        Ok(RequestProfile::new(
+            Method::GET,
+            url,
+            Some(params),
+            HeaderMap::new(),
+            None,
+        ))
+    }
 }
 
 impl ResponseExt {
     pub async fn filter_text(self, profile: &ResponseProfile) -> Result<String> {
         let res = self.0;
-        let mut output = String::new();
-        output.push_str(&format!("{:?} {}\r", res.version(), res.status()));
-        let headers = res.headers();
 
-        for (k, v) in headers.iter() {
-            if !profile.skip_headers.iter().any(|sh| sh == k.as_str()) {
-                output.push_str(&format!("{}: {:?}", k, v));
-            }
-        }
-        output.push('\n');
+        let mut output = get_header_text(&res, &profile.skip_headers)?;
 
-        let content_type = get_content_type(&headers);
+        let content_type = get_content_type(res.headers());
         let text = res.text().await?;
         match content_type.as_deref() {
             Some("application/json") => {
                 let text = filter_json(&text, &profile.skip_body)?;
-                output.push_str(&text);
+                writeln!(&mut output, "{}", text)?;
             }
             _ => {
-                output.push_str(&text);
+                writeln!(&mut output, "{}", text)?;
             }
         }
         Ok(output)
     }
+    pub fn get_header_keys(&self) -> Vec<String> {
+        let res = &self.0;
+        let headers = res.headers();
+        headers
+            .iter()
+            .map(|(k, _)| k.as_str().to_string())
+            .collect()
+    }
+}
+
+fn get_header_text(res: &Response, skip_headers: &[String]) -> Result<String> {
+    let mut output = String::new();
+    writeln!(&mut output, "{:?} {}", res.version(), res.status())?;
+    let headers = res.headers();
+
+    for (k, v) in headers.iter() {
+        if !skip_headers.iter().any(|sh| sh == k.as_str()) {
+            writeln!(&mut output, "{}: {:?}", k, v)?;
+        }
+    }
+
+    writeln!(&mut output)?;
+    Ok(output)
 }
 
 fn filter_json(text: &str, skip: &[String]) -> Result<String> {
     let mut json: serde_json::Value = serde_json::from_str(text)?;
 
-    #[allow(clippy::single_match)]
-    match json {
-        serde_json::Value::Object(ref mut obj) => {
-            for k in skip {
-                obj.remove(k);
-            }
+    if let serde_json::Value::Object(ref mut obj) = json {
+        for k in skip {
+            obj.remove(k);
         }
-        _ =>
-            // For now we just ignore non-object values, we don't know how to filter. In future, we might support array of objects
-            {}
     }
 
     Ok(serde_json::to_string_pretty(&json)?)

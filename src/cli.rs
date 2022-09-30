@@ -16,6 +16,8 @@ pub struct Args {
 pub enum Action {
     /// Diff two Api response based on given profile
     Run(RunArgs),
+    /// Parse URLS to generate a Profile
+    Parse,
 }
 
 #[derive(Parser, Debug, Clone)]
