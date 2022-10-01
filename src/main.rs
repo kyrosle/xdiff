@@ -4,7 +4,7 @@ use dialoguer::{theme::ColorfulTheme, Input, MultiSelect};
 use std::io::Write;
 use xdiff::{
     cli::{Action, Args, RunArgs},
-    DiffConfig, DiffProfile, RequestProfile, ResponseProfile, ExtraArgs,
+    DiffConfig, DiffProfile, RequestProfile, ResponseProfile, ExtraArgs, highlight_text,
 };
 
 #[tokio::main]
@@ -49,6 +49,7 @@ async fn parse() -> Result<()> {
     let profile = DiffProfile::new(req1, req2, res);
     let config = DiffConfig::new(vec![(name, profile)].into_iter().collect());
     let result = serde_yaml::to_string(&config)?;
+    let result =  highlight_text(result.as_str(), "yaml")?;
 
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();

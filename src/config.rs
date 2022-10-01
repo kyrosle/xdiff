@@ -1,8 +1,8 @@
-use anyhow::{Context, Error, Result};
+use anyhow::{Context, Result};
 use reqwest::{header::HeaderMap, Method, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::{collections::HashMap, str::FromStr};
+
+use std::{collections::HashMap};
 use tokio::fs;
 
 use crate::{utils::diff_text, ExtraArgs};
