@@ -1,8 +1,8 @@
 use anyhow::Result;
-use xdiff::DiffConfig;
+use xdiff::{RequestConfig, LoadConfig};
 fn main() -> Result<()> {
-    let content = include_str!("../fixtures/test.yml");
-    let config = DiffConfig::from_yaml(content)?;
+    let content = include_str!("../fixtures/xreq_test.yml");
+    let config = RequestConfig::from_yaml(content)?;
     println!("{:#?}", config);
     Ok(())
 }

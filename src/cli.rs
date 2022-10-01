@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
-use clap::{Parser, Subcommand};
 
+use clap::{Parser, Subcommand};
 use crate::ExtraArgs;
+
 
 /// Diff two http requests and compare the difference between the response
 #[derive(Parser, Debug)]
@@ -40,6 +41,7 @@ pub struct RunArgs {
     #[clap(short, long, value_parser)]
     pub config: Option<String>,
 }
+
 #[derive(Debug, Clone)]
 pub enum KeyValType {
     Query,
@@ -54,7 +56,7 @@ pub struct KeyVal {
     value: String,
 }
 
-fn parse_key_val(s: &str) -> Result<KeyVal> {
+pub fn parse_key_val(s: &str) -> Result<KeyVal> {
     let mut parts = s.splitn(2, '=');
 
     let key = parts

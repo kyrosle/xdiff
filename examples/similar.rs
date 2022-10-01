@@ -1,6 +1,4 @@
 use std::fmt;
-use std::fs::read;
-use std::process::exit;
 
 use console::{style, Style};
 use similar::{ChangeTag, TextDiff};

@@ -1,0 +1,12 @@
+---
+todo:
+  url: https://jsonplaceholder.typicode.com/todos/1
+  params:
+    a: 100
+    b: 200
+todo-post:
+  url: https://jsonplaceholder.typicode.com/todos
+  method: POST
+  body: 
+    title: 'hello'
+    competed: false

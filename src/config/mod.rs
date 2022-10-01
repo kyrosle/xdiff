@@ -1,14 +1,59 @@
-use std::str::FromStr;
-
+mod xdiff;
+mod xreq;
 use anyhow::{anyhow, Error, Result};
+use async_trait::async_trait;
 use reqwest::{
     header::{self, HeaderMap, HeaderName, HeaderValue},
     Client, Method, Response, Url,
 };
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use std::fmt::Write;
+use std::str::FromStr;
+use tokio::fs;
+pub use xdiff::*;
+pub use xreq::RequestConfig;
 
-use crate::{ExtraArgs, RequestProfile, ResponseProfile};
+use crate::ExtraArgs;
+
+#[async_trait]
+pub trait LoadConfig
+where
+    Self: Sized + ValidateConfig + DeserializeOwned,
+{
+    /// load config from yaml file
+    async fn load_yaml(path: &str) -> Result<Self> {
+        let content = fs::read_to_string(path).await?;
+        Self::from_yaml(&content)
+    }
+
+    /// load config from yaml string
+    fn from_yaml(content: &str) -> Result<Self> {
+        let config: Self = serde_yaml::from_str(content)?;
+        config.validate()?;
+        Ok(config)
+    }
+}
+pub trait ValidateConfig {
+    fn validate(&self) -> Result<()>;
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RequestProfile {
+    #[serde(with = "http_serde::method", default)]
+    pub method: Method,
+    pub url: Url,
+    #[serde(skip_serializing_if = "empty_json_value", default)]
+    pub params: Option<serde_json::Value>,
+    #[serde(
+        skip_serializing_if = "HeaderMap::is_empty",
+        with = "http_serde::header_map",
+        default
+    )]
+    pub headers: HeaderMap,
+    #[serde(skip_serializing_if = "empty_json_value", default)]
+    pub body: Option<serde_json::Value>,
+}
 
 #[derive(Debug)]
 pub struct ResponseExt(Response);
@@ -44,6 +89,15 @@ impl RequestProfile {
             .build()?;
         let res = client.execute(req).await?;
         Ok(ResponseExt(res))
+    }
+    pub fn get_url(&self, args: &ExtraArgs) -> Result<String> {
+        let (_, params, _) = self.generate(args)?;
+        let mut url = self.url.clone();
+        if !params.as_object().unwrap().is_empty() {
+            let query = serde_qs::to_string(&params)?;
+            url.set_query(Some(&query));
+        }
+        Ok(url.to_string())
     }
     pub fn generate(&self, args: &ExtraArgs) -> Result<(HeaderMap, serde_json::Value, String)> {
         let mut headers = self.headers.clone();
@@ -82,7 +136,10 @@ impl RequestProfile {
             _ => Err(anyhow::anyhow!("unsupported content-type")),
         }
     }
-    pub(crate) fn validate(&self) -> Result<()> {
+}
+
+impl ValidateConfig for RequestProfile {
+    fn validate(&self) -> Result<()> {
         if let Some(params) = self.params.as_ref() {
             if !params.is_object() {
                 return Err(anyhow!(
@@ -124,22 +181,24 @@ impl FromStr for RequestProfile {
 }
 
 impl ResponseExt {
-    pub async fn filter_text(self, profile: &ResponseProfile) -> Result<String> {
+    pub fn into_inner(self) -> Response {
+        self.0
+    }
+    pub async fn get_text(self, profile: &ResponseProfile) -> Result<String> {
         let res = self.0;
+        let mut output = get_status_text(&res)?;
 
-        let mut output = get_header_text(&res, &profile.skip_headers)?;
+        write!(
+            &mut output,
+            "{}",
+            get_header_text(&res, &profile.skip_headers)?
+        )?;
 
-        let content_type = get_content_type(res.headers());
-        let text = res.text().await?;
-        match content_type.as_deref() {
-            Some("application/json") => {
-                let text = filter_json(&text, &profile.skip_body)?;
-                writeln!(&mut output, "{}", text)?;
-            }
-            _ => {
-                writeln!(&mut output, "{}", text)?;
-            }
-        }
+        write!(
+            &mut output,
+            "{}",
+            get_body_text(res, &profile.skip_body).await?
+        )?;
         Ok(output)
     }
     pub fn get_header_keys(&self) -> Vec<String> {
@@ -151,10 +210,27 @@ impl ResponseExt {
             .collect()
     }
 }
-
-fn get_header_text(res: &Response, skip_headers: &[String]) -> Result<String> {
+pub async fn get_body_text(res: Response, skip_body: &[String]) -> Result<String> {
     let mut output = String::new();
-    writeln!(&mut output, "{:?} {}", res.version(), res.status())?;
+    let content_type = get_content_type(res.headers());
+    let text = res.text().await?;
+    match content_type.as_deref() {
+        Some("application/json") => {
+            let text = filter_json(&text, skip_body)?;
+            write!(&mut output, "{}", text)?;
+        }
+        _ => {
+            write!(&mut output, "{}", text)?;
+        }
+    }
+    Ok(output)
+}
+
+pub fn get_status_text(res: &Response) -> Result<String> {
+    Ok(format!("{:?} {}", res.version(), res.status()))
+}
+pub fn get_header_text(res: &Response, skip_headers: &[String]) -> Result<String> {
+    let mut output = String::new();
     let headers = res.headers();
 
     for (k, v) in headers.iter() {
@@ -184,4 +260,14 @@ fn get_content_type(headers: &HeaderMap) -> Option<String> {
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().unwrap().split(';').next())
         .map(|v| v.to_string())
+}
+
+fn empty_json_value(v: &Option<serde_json::Value>) -> bool {
+    v.as_ref().map_or(true, |v| {
+        v.is_null() || (v.is_object() && v.as_object().unwrap().is_empty())
+    })
+}
+
+pub fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    v == &T::default()
 }
