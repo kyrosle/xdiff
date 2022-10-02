@@ -9,7 +9,6 @@ rust:
   req2:
     method: GET
     url: https://www.rust-lang.org/
-    params: "abdce"
   response:
     skip_headers:
       - set-cookie
